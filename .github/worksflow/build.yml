@@ -1,0 +1,427 @@
+name: Crear APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Crear proyecto
+        run: |
+          mkdir -p $(dirname settings.gradle.kts)
+          cat > settings.gradle.kts <<'FIN_ARCHIVO'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "Stopwatch"
+          include(":app")
+          FIN_ARCHIVO
+          mkdir -p $(dirname build.gradle.kts)
+          cat > build.gradle.kts <<'FIN_ARCHIVO'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          FIN_ARCHIVO
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'FIN_ARCHIVO'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          FIN_ARCHIVO
+          mkdir -p $(dirname app/build.gradle.kts)
+          cat > app/build.gradle.kts <<'FIN_ARCHIVO'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.stopwatch.flotante"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.stopwatch.flotante"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          FIN_ARCHIVO
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'FIN_ARCHIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="Stopwatch"
+                  android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".FloatingService"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="cronometro_flotante" />
+                  </service>
+              </application>
+          </manifest>
+          FIN_ARCHIVO
+          mkdir -p $(dirname app/src/main/res/drawable/ic_launcher.xml)
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'FIN_ARCHIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#5AA9FF"
+                  android:pathData="M24,0h60a24,24 0 0 1 24,24v60a24,24 0 0 1 -24,24h-60a24,24 0 0 1 -24,-24v-60a24,24 0 0 1 24,-24z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M54,24a30,30 0 1 0 0.01,0z" />
+              <path
+                  android:fillColor="#5AA9FF"
+                  android:pathData="M51,38h6v18l11,7 -3,5 -14,-9z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M48,14h12v6h-12z" />
+          </vector>
+          FIN_ARCHIVO
+          mkdir -p $(dirname app/src/main/java/com/stopwatch/flotante/MainActivity.kt)
+          cat > app/src/main/java/com/stopwatch/flotante/MainActivity.kt <<'FIN_ARCHIVO'
+          package com.stopwatch.flotante
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class MainActivity : Activity() {
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
+                  }
+
+                  val pad = (24 * resources.displayMetrics.density).toInt()
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(pad, pad, pad, pad)
+                  }
+
+                  val info = TextView(this).apply {
+                      text = "Cronómetro flotante\n\n1. Da el permiso de mostrar sobre otras apps.\n" +
+                          "2. Pulsa Mostrar.\n\nUn toque: iniciar / pausar\nDoble toque: poner en ceros\nArrastrar: mover"
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                  }
+
+                  val bPermiso = Button(this).apply {
+                      text = "Dar permiso"
+                      setOnClickListener {
+                          startActivity(
+                              Intent(
+                                  Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                  Uri.parse("package:$packageName")
+                              )
+                          )
+                      }
+                  }
+
+                  val bMostrar = Button(this).apply {
+                      text = "Mostrar cronómetro"
+                      setOnClickListener {
+                          if (Settings.canDrawOverlays(this@MainActivity)) {
+                              startForegroundService(Intent(this@MainActivity, FloatingService::class.java))
+                          } else {
+                              Toast.makeText(this@MainActivity, "Primero da el permiso", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                  }
+
+                  val bCerrar = Button(this).apply {
+                      text = "Cerrar cronómetro"
+                      setOnClickListener { stopService(Intent(this@MainActivity, FloatingService::class.java)) }
+                  }
+
+                  root.addView(info)
+                  root.addView(bPermiso)
+                  root.addView(bMostrar)
+                  root.addView(bCerrar)
+                  setContentView(root)
+              }
+          }
+          FIN_ARCHIVO
+          mkdir -p $(dirname app/src/main/java/com/stopwatch/flotante/FloatingService.kt)
+          cat > app/src/main/java/com/stopwatch/flotante/FloatingService.kt <<'FIN_ARCHIVO'
+          package com.stopwatch.flotante
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.os.SystemClock
+          import android.text.Spannable
+          import android.text.SpannableString
+          import android.text.style.RelativeSizeSpan
+          import android.view.Gravity
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import android.widget.TextView
+          import java.util.Locale
+          import kotlin.math.abs
+
+          class FloatingService : Service() {
+
+              companion object {
+                  const val ACTION_STOP = "com.stopwatch.flotante.STOP"
+                  private const val CHANNEL_ID = "cronometro"
+              }
+
+              private lateinit var wm: WindowManager
+              private lateinit var params: WindowManager.LayoutParams
+              private var tv: TextView? = null
+
+              private val handler = Handler(Looper.getMainLooper())
+              private var running = false
+              private var startAt = 0L
+              private var elapsed = 0L
+
+              private val tick = object : Runnable {
+                  override fun run() {
+                      if (running) {
+                          render(elapsed + SystemClock.elapsedRealtime() - startAt)
+                          handler.postDelayed(this, 30)
+                      }
+                  }
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  startForeground(1, buildNotification())
+                  if (intent?.action == ACTION_STOP) {
+                      stopSelf()
+                      return START_NOT_STICKY
+                  }
+                  if (tv == null) showOverlay()
+                  return START_NOT_STICKY
+              }
+
+              private fun buildNotification(): Notification {
+                  val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                  nm.createNotificationChannel(
+                      NotificationChannel(CHANNEL_ID, "Cronómetro", NotificationManager.IMPORTANCE_LOW)
+                  )
+                  val stop = PendingIntent.getService(
+                      this, 0,
+                      Intent(this, FloatingService::class.java).setAction(ACTION_STOP),
+                      PendingIntent.FLAG_IMMUTABLE
+                  )
+                  return Notification.Builder(this, CHANNEL_ID)
+                      .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                      .setContentTitle("Cronómetro activo")
+                      .setContentText("Toca Cerrar para quitarlo")
+                      .addAction(Notification.Action.Builder(null, "Cerrar", stop).build())
+                      .setOngoing(true)
+                      .build()
+              }
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+              private fun showOverlay() {
+                  wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+                  val view = TextView(this).apply {
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.DEFAULT_BOLD
+                      textSize = 28f
+                      setPadding(dp(16), dp(8), dp(16), dp(8))
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#8B1116"))
+                          cornerRadius = dp(8).toFloat()
+                      }
+                      alpha = 0.75f
+                  }
+
+                  params = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.WRAP_CONTENT,
+                      WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                      PixelFormat.TRANSLUCENT
+                  ).apply {
+                      gravity = Gravity.TOP or Gravity.START
+                      x = dp(120)
+                      y = dp(150)
+                  }
+
+                  view.setOnTouchListener(object : View.OnTouchListener {
+                      var ix = 0
+                      var iy = 0
+                      var tx = 0f
+                      var ty = 0f
+                      var moved = false
+                      var lastTap = 0L
+
+                      override fun onTouch(v: View, e: MotionEvent): Boolean {
+                          when (e.action) {
+                              MotionEvent.ACTION_DOWN -> {
+                                  ix = params.x; iy = params.y
+                                  tx = e.rawX; ty = e.rawY
+                                  moved = false
+                              }
+                              MotionEvent.ACTION_MOVE -> {
+                                  val dx = e.rawX - tx
+                                  val dy = e.rawY - ty
+                                  if (abs(dx) > 12 || abs(dy) > 12) moved = true
+                                  if (moved) {
+                                      params.x = ix + dx.toInt()
+                                      params.y = iy + dy.toInt()
+                                      wm.updateViewLayout(v, params)
+                                  }
+                              }
+                              MotionEvent.ACTION_UP -> {
+                                  if (!moved) {
+                                      if (lastTap != 0L && e.eventTime - lastTap < 350) {
+                                          reset()
+                                          lastTap = 0L
+                                      } else {
+                                          toggle()
+                                          lastTap = e.eventTime
+                                      }
+                                  }
+                              }
+                          }
+                          return true
+                      }
+                  })
+
+                  tv = view
+                  render(0)
+                  wm.addView(view, params)
+              }
+
+              private fun toggle() {
+                  if (running) {
+                      elapsed += SystemClock.elapsedRealtime() - startAt
+                      running = false
+                      handler.removeCallbacks(tick)
+                      tv?.alpha = 0.75f
+                      render(elapsed)
+                  } else {
+                      startAt = SystemClock.elapsedRealtime()
+                      running = true
+                      tv?.alpha = 1f
+                      handler.post(tick)
+                  }
+              }
+
+              private fun reset() {
+                  running = false
+                  handler.removeCallbacks(tick)
+                  elapsed = 0L
+                  tv?.alpha = 0.75f
+                  render(0)
+              }
+
+              private fun render(ms: Long) {
+                  val cs = (ms / 10) % 100
+                  val s = (ms / 1000) % 60
+                  val m = (ms / 60000) % 60
+                  val h = ms / 3600000
+                  val main = if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+                  else String.format(Locale.US, "%02d:%02d", m, s)
+                  val full = main + String.format(Locale.US, ":%02d", cs)
+                  val sp = SpannableString(full)
+                  sp.setSpan(RelativeSizeSpan(0.6f), main.length, full.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                  tv?.text = sp
+              }
+
+              override fun onDestroy() {
+                  handler.removeCallbacks(tick)
+                  tv?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+                  tv = null
+                  super.onDestroy()
+              }
+          }
+          FIN_ARCHIVO
+
+      - name: Compilar
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stopwatch-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
